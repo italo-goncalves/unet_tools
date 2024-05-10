@@ -15,6 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import skimage.transform as skt
+import skimage.exposure as ske
 import skimage.io as io
 import numpy as np
 import os
@@ -51,6 +52,7 @@ def augment_data(photos, labels, n_rolls=5):
     :return:
     """
     resolution = photos.shape[1:3]
+    width = resolution[1]
 
     pixels_rolled = int(resolution[1] / n_rolls)
     aug_x, aug_y = [], []
@@ -58,19 +60,24 @@ def augment_data(photos, labels, n_rolls=5):
         flipped_x = np.flip(tx, axis=1)
         flipped_y = np.flip(ty, axis=1)
 
-        aug_x.append(flipped_x)
-        aug_y.append(flipped_y)
+        tx = np.concatenate([tx, flipped_x], axis=1)
+        ty = np.concatenate([ty, flipped_y], axis=1)
 
-        for r in range(n_rolls):
+        # aug_x.append(flipped_x)
+        # aug_y.append(flipped_y)
+
+        for r in range(n_rolls * 2):
             tx = np.roll(tx, pixels_rolled, axis=1)
             ty = np.roll(ty, pixels_rolled, axis=1)
-            flipped_x = np.roll(flipped_x, pixels_rolled, axis=1)
-            flipped_y = np.roll(flipped_y, pixels_rolled, axis=1)
+            # flipped_x = np.roll(flipped_x, pixels_rolled, axis=1)
+            # flipped_y = np.roll(flipped_y, pixels_rolled, axis=1)
 
-            aug_x.append(tx)
-            aug_y.append(ty)
-            aug_x.append(flipped_x)
-            aug_y.append(flipped_y)
+            tx_gamma = ske.adjust_gamma(tx[:, :width, :], np.exp(np.random.uniform(-0.4, 0.4)))
+
+            aug_x.append(tx_gamma)
+            aug_y.append(ty[:, :width, :])
+            # aug_x.append(flipped_x)
+            # aug_y.append(flipped_y)
     aug_x = np.stack(aug_x)
     aug_y = np.stack(aug_y)
 

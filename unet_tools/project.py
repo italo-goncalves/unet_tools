@@ -144,7 +144,7 @@ class SegmentationProject:
             self.report = classification_report(
                 true_num[self.split == "test"].ravel() + 1,
                 pred_num[self.split == "test"].ravel() + 1,
-                labels=np.arange(self.n_classes + 1),
+                labels=np.arange(self.n_classes + 1) + 1,
                 target_names=list(self.labels) + ["Other"])
             print(self.report)
 
