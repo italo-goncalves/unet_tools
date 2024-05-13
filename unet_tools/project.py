@@ -142,9 +142,9 @@ class SegmentationProject:
 
             # metrics
             self.report = classification_report(
-                true_num[self.split == "test"].ravel() + 1,
-                pred_num[self.split == "test"].ravel() + 1,
-                labels=np.arange(self.n_classes + 1) + 1,
+                true_num[self.split == "test"].ravel(),
+                pred_num[self.split == "test"].ravel() ,
+                labels=np.arange(self.n_classes + 1),
                 target_names=list(self.labels) + ["Other"])
             print(self.report)
 
@@ -154,14 +154,14 @@ class SegmentationProject:
                 axes[0, 0].imshow(self.photos_resized[line, :, :, :])
                 axes[0, 0].imshow(np.argmax(self.masks_resized, axis=-1)[line, :, :],
                                   alpha=0.5, cmap=self.numeric_cmap,
-                                  vmin=0, vmax=self.n_classes - 1)
+                                  vmin=0, vmax=self.n_classes)
                 axes[0, 0].set_title("True")
                 axes[0, 0].set_axis_off()
 
                 axes[0, 1].imshow(self.photos_resized[line, :, :, :])
                 axes[0, 1].imshow(np.argmax(pred_y, axis=-1)[line, :, :],
                                   alpha=0.5, cmap=self.numeric_cmap,
-                                  vmin=0, vmax=self.n_classes - 1)
+                                  vmin=0, vmax=self.n_classes)
                 axes[0, 1].set_title("Predicted (" + self.split[line] + ")")
                 axes[0, 1].set_axis_off()
 
@@ -183,7 +183,13 @@ class SegmentationProject:
 
                 plt.close(fig)
 
-    def predict_masks(self, images_path, prediction_path):
+    def predict_masks(self, images_path, prediction_path, dpi=150):
+        for name in (self.labels + ['Predictions']):
+            try:
+                os.mkdir(os.path.join(prediction_path, name))
+            finally:
+                pass
+
         photos_prediction = pr.load_photos(
             path=images_path,
             downscaling_factor=[self.downscaling_factor]*2)
@@ -193,6 +199,7 @@ class SegmentationProject:
         )
 
         pred_masks = self.u_net.predict(photos_prediction, batch_size=5)
+        entropy = - np.sum(pred_masks * np.log(pred_masks + 1e-6), axis=-1)
 
         photo_names = os.listdir(images_path)
 
@@ -203,5 +210,37 @@ class SegmentationProject:
                 anti_aliasing=True)
 
             for i, label in enumerate(self.labels):
-                io.imsave(os.path.join(prediction_path, label + '_' + photo_names[line]),
+                io.imsave(os.path.join(prediction_path, label, photo_names[line] + '_mask'),
                           np.round(mask_big[:, :, i], 0).astype(np.uint8) * 255)
+
+            # visualization of predictions
+            fig, axes = plt.subplots(2, 2, sharex=True, sharey=True,
+                                     figsize=[12, 12])
+            axes[0, 0].imshow(photos_prediction[line, :, :, :])
+            axes[0, 0].set_title("Image")
+            axes[0, 0].set_axis_off()
+
+            axes[0, 1].imshow(photos_prediction[line, :, :, :])
+            axes[0, 1].imshow(np.argmax(pred_masks, axis=-1)[line, :, :],
+                              alpha=0.5, cmap=self.numeric_cmap,
+                              vmin=0, vmax=self.n_classes)
+            axes[0, 1].set_title("Predicted")
+            axes[0, 1].set_axis_off()
+
+            axes[1, 0].set_aspect("equal")
+            axes[1, 0].set_axis_off()
+            axes[1, 0].legend(handles=self.color_patches, mode="expand",
+                              loc="upper left", frameon=False, fontsize=14)
+            axes[1, 0].set_axis_off()
+
+            axes[1, 1].imshow(self.photos_resized[line, :, :, :])
+            axes[1, 1].imshow(entropy[line, :, :],
+                              alpha=0.25, cmap=self.cmap_entropy,
+                              vmin=0, vmax=np.log(self.n_classes))
+            axes[1, 1].set_title("Entropy")
+            axes[1, 1].set_axis_off()
+
+            plt.savefig(os.path.join(prediction_path, 'Predictions', photo_names[line] + '_prediction'),
+                        bbox_inches='tight', dpi=dpi)
+
+            plt.close(fig)
