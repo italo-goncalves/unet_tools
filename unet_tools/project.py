@@ -184,9 +184,9 @@ class SegmentationProject:
                 plt.close(fig)
 
     def predict_masks(self, images_path, prediction_path, dpi=150):
-        for name in (self.labels + ['Predictions']):
+        for label in (self.labels + ['Predictions']):
             try:
-                os.mkdir(os.path.join(prediction_path, name))
+                os.mkdir(os.path.join(prediction_path, label))
             finally:
                 pass
 
@@ -209,8 +209,10 @@ class SegmentationProject:
                 (self.image_height, self.image_width, self.n_classes),
                 anti_aliasing=True)
 
+            name, ext = photo_names[line].split('.')
+
             for i, label in enumerate(self.labels):
-                io.imsave(os.path.join(prediction_path, label, photo_names[line] + '_mask'),
+                io.imsave(os.path.join(prediction_path, label, name + '_mask.' + ext),
                           np.round(mask_big[:, :, i], 0).astype(np.uint8) * 255)
 
             # visualization of predictions
@@ -240,7 +242,7 @@ class SegmentationProject:
             axes[1, 1].set_title("Entropy")
             axes[1, 1].set_axis_off()
 
-            plt.savefig(os.path.join(prediction_path, 'Predictions', photo_names[line] + '_prediction'),
+            plt.savefig(os.path.join(prediction_path, 'Predictions', name + '_prediction.' + ext),
                         bbox_inches='tight', dpi=dpi)
 
             plt.close(fig)
