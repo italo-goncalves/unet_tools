@@ -184,7 +184,7 @@ class SegmentationProject:
                 plt.close(fig)
 
     def predict_masks(self, images_path, prediction_path, dpi=150):
-        for label in (self.labels + ['Predictions']):
+        for label in (self.labels + ('Predictions',)):
             try:
                 os.mkdir(os.path.join(prediction_path, label))
             finally:
@@ -235,7 +235,7 @@ class SegmentationProject:
                               loc="upper left", frameon=False, fontsize=14)
             axes[1, 0].set_axis_off()
 
-            axes[1, 1].imshow(self.photos_resized[line, :, :, :])
+            axes[1, 1].imshow(photos_prediction[line, :, :, :])
             axes[1, 1].imshow(entropy[line, :, :],
                               alpha=0.25, cmap=self.cmap_entropy,
                               vmin=0, vmax=np.log(self.n_classes))
@@ -246,3 +246,4 @@ class SegmentationProject:
                         bbox_inches='tight', dpi=dpi)
 
             plt.close(fig)
+            
