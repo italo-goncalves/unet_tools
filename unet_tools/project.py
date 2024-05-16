@@ -98,7 +98,8 @@ class SegmentationProject:
 
         self.train_x_full, self.train_y_full = pr.shuffle(self.train_x_full, self.train_y_full, seed=self.seed)
 
-    def build_u_net(self, channels=32, blocks=4, residual=False):
+    def build_u_net(self, channels=32, blocks=4, block_depth=2, residual=False,
+                    dropout_prob=0.1, filter_size=5):
         net_input = tf.keras.layers.Input(self.train_x.shape[1:])
         net_output = k.u_net(
             input_layer=net_input,
@@ -106,6 +107,9 @@ class SegmentationProject:
             channels=channels,
             blocks=blocks,
             residual=residual,
+            block_depth=block_depth,
+            dropout_prob=dropout_prob,
+            filter_size=filter_size,
             end_activation="softmax")
 
         self.u_net = tf.keras.Model(inputs=net_input, outputs=net_output)
@@ -246,4 +250,3 @@ class SegmentationProject:
                         bbox_inches='tight', dpi=dpi)
 
             plt.close(fig)
-            
