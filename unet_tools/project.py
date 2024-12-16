@@ -25,6 +25,7 @@ import tensorflow as tf
 from sklearn.metrics import classification_report
 import skimage.transform as skt
 import skimage.io as io
+import warnings
 
 import unet_tools.preprocessing as pr
 import unet_tools.utils as ut
@@ -78,7 +79,7 @@ class SegmentationProject:
     def resize_dataset(self):
         self.photos_resized, self.masks_resized = pr.resize(self.photos, self.masks, self.resolution)
 
-        self.class_weights = pr.balance_weights(self.masks_resized)
+        self.class_weights = pr.balance_weights(self.masks_resized)#.tolist()
 
     def train_test_split(self, train_perc=0.5):
         self.split = ut.train_test_label(
@@ -115,8 +116,12 @@ class SegmentationProject:
         self.u_net = tf.keras.Model(inputs=net_input, outputs=net_output)
         self.u_net.compile(
             optimizer=tf.keras.optimizers.Adam(1e-4),
-            loss="categorical_crossentropy",
-            loss_weights=self.class_weights,
+            # loss="categorical_crossentropy",
+            # loss=tf.keras.losses.CategoricalFocalCrossentropy(), #alpha=self.class_weights),
+            loss=tf.keras.losses.CategoricalFocalCrossentropy(
+                alpha=0.2 + 0.1 * self.class_weights / np.max(self.class_weights)
+            ),
+            # loss_weights={net_output.name: [self.class_weights]},
             metrics=['accuracy'])
 
     def train_u_net(self, batch_size=10, epochs=50, validation_split=0.1, full_data=False):
@@ -124,6 +129,7 @@ class SegmentationProject:
                        self.train_y_full if full_data else self.train_y,
                        batch_size=batch_size,
                        epochs=epochs,
+                       # class_weight={i: val for i, val in enumerate(self.class_weights)},
                        validation_split=validation_split)
 
     def plot_history(self):
@@ -187,12 +193,68 @@ class SegmentationProject:
 
                 plt.close(fig)
 
+    def test(self, images_path, prediction_path, dpi=150):
+        if self.u_net is None:
+            return Exception('U-net not trained')
+        else:
+            photos, masks = pr.compile_dataset(images_path, self.labels, [self.downscaling_factor] * 2)
+            photos, masks = pr.resize(photos, masks, self.resolution)
+
+            pred_y = self.u_net.predict(photos, batch_size=5)
+            entropy = - np.sum(pred_y * np.log(pred_y + 1e-6), axis=-1)
+            true_num = np.argmax(masks, axis=-1)
+            pred_num = np.argmax(pred_y, axis=-1)
+
+            # metrics
+            report = classification_report(
+                true_num[self.split == "test"].ravel(),
+                pred_num[self.split == "test"].ravel() ,
+                labels=np.arange(self.n_classes + 1),
+                target_names=list(self.labels) + ["Other"])
+            with open(os.path.join(prediction_path, "report.txt"), "w") as file:
+                file.write(report)
+
+            # figures
+            for line in range(masks.shape[0]):
+                fig, axes = plt.subplots(2, 2, sharex=True, sharey=True, figsize=[12, 12])
+                axes[0, 0].imshow(photos[line, :, :, :])
+                axes[0, 0].imshow(np.argmax(masks, axis=-1)[line, :, :],
+                                  alpha=0.5, cmap=self.numeric_cmap,
+                                  vmin=0, vmax=self.n_classes)
+                axes[0, 0].set_title("True")
+                axes[0, 0].set_axis_off()
+
+                axes[0, 1].imshow(photos[line, :, :, :])
+                axes[0, 1].imshow(np.argmax(pred_y, axis=-1)[line, :, :],
+                                  alpha=0.5, cmap=self.numeric_cmap,
+                                  vmin=0, vmax=self.n_classes)
+                axes[0, 1].set_title("Predicted (" + self.split[line] + ")")
+                axes[0, 1].set_axis_off()
+
+                axes[1, 0].set_aspect("equal")
+                axes[1, 0].set_axis_off()
+                axes[1, 0].legend(handles=self.color_patches, mode="expand",
+                                  loc="upper left", frameon=False, fontsize=14)
+                axes[1, 0].set_axis_off()
+
+                axes[1, 1].imshow(photos[line, :, :, :])
+                axes[1, 1].imshow(entropy[line, :, :],
+                                  alpha=0.25, cmap=self.cmap_entropy,
+                                  vmin=0, vmax=np.log(self.n_classes))
+                axes[1, 1].set_title("Entropy")
+                axes[1, 1].set_axis_off()
+
+                plt.savefig(os.path.join(prediction_path, f'Prediction_{line}.jpg'),
+                            bbox_inches='tight', dpi=dpi)
+
+                plt.close(fig)
+
     def predict_masks(self, images_path, prediction_path, dpi=150):
         for label in (self.labels + ('Predictions',)):
             try:
                 os.mkdir(os.path.join(prediction_path, label))
-            finally:
-                pass
+            except FileExistsError:
+                continue
 
         photos_prediction = pr.load_photos(
             path=images_path,
@@ -208,16 +270,25 @@ class SegmentationProject:
         photo_names = os.listdir(images_path)
 
         for line in range(photos_prediction.shape[0]):
+            print(f'\rSaving predictions for image {line + 1} of '
+                  f'{photos_prediction.shape[0]}: {photo_names[line]}          ',
+                  end='')
+
             mask_big = skt.resize(
                 pred_masks[line],
-                (self.image_height, self.image_width, self.n_classes),
+                (self.image_height, self.image_width), #self.n_classes),
                 anti_aliasing=True)
+            mask_cat = np.argmax(mask_big, axis=-1)
 
             name, ext = photo_names[line].split('.')
 
             for i, label in enumerate(self.labels):
-                io.imsave(os.path.join(prediction_path, label, name + '_mask.' + ext),
-                          np.round(mask_big[:, :, i], 0).astype(np.uint8) * 255)
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    # io.imsave(os.path.join(prediction_path, label, f'{name}_mask.{ext}'),
+                    #           np.round(mask_big[:, :, i], 0).astype(np.uint8) * 255)
+                    io.imsave(os.path.join(prediction_path, label, f'{name}_mask.{ext}'),
+                              (mask_cat == i).astype(np.uint8) * 255)
 
             # visualization of predictions
             fig, axes = plt.subplots(2, 2, sharex=True, sharey=True,
@@ -250,3 +321,5 @@ class SegmentationProject:
                         bbox_inches='tight', dpi=dpi)
 
             plt.close(fig)
+
+        print('')
