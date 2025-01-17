@@ -5,3 +5,6 @@ matplotlib>=3.7.1
 scikit-image>=0.20.0
 cmcrameri>=1.5
 scikit-learn>=1.2.2
+pyexiv2>=2.15.3
+pyproj>=3.7.0
+opencv-python>=4.10.0

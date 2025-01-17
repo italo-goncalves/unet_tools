@@ -14,21 +14,25 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-import skimage.transform as skt
+# import skimage.transform as skt
 import skimage.exposure as ske
 import skimage.io as io
 import numpy as np
 import os
+import pyexiv2
+import pyproj
+import cv2
+# import warnings
 
 
-def resize(photos, labels, resolution):
-    photos_resized = np.stack(
-        [skt.resize(photo, resolution, anti_aliasing=True) for photo in photos]
-    )
-    labels_resized = np.stack(
-        [skt.resize(label, resolution, anti_aliasing=True) for label in labels]
-    )
-    return photos_resized, labels_resized
+# def resize(photos, labels, resolution):
+#     photos_resized = np.stack(
+#         [skt.resize(photo, resolution, anti_aliasing=True) for photo in photos]
+#     )
+#     labels_resized = np.stack(
+#         [skt.resize(label, resolution, anti_aliasing=True) for label in labels]
+#     )
+#     return photos_resized, labels_resized
 
 
 def balance_weights(labels):
@@ -63,21 +67,14 @@ def augment_data(photos, labels, n_rolls=5):
         tx = np.concatenate([tx, flipped_x], axis=1)
         ty = np.concatenate([ty, flipped_y], axis=1)
 
-        # aug_x.append(flipped_x)
-        # aug_y.append(flipped_y)
-
         for r in range(n_rolls * 2):
             tx = np.roll(tx, pixels_rolled, axis=1)
             ty = np.roll(ty, pixels_rolled, axis=1)
-            # flipped_x = np.roll(flipped_x, pixels_rolled, axis=1)
-            # flipped_y = np.roll(flipped_y, pixels_rolled, axis=1)
 
             tx_gamma = ske.adjust_gamma(tx[:, :width, :], np.exp(np.random.uniform(-0.4, 0.4)))
 
             aug_x.append(tx_gamma)
             aug_y.append(ty[:, :width, :])
-            # aug_x.append(flipped_x)
-            # aug_y.append(flipped_y)
     aug_x = np.stack(aug_x)
     aug_y = np.stack(aug_y)
 
@@ -95,9 +92,8 @@ def shuffle(photos, labels, seed=None):
     return photos, labels
 
 
-def compile_dataset(path, class_labels,
-                    downscaling_factor=(10, 10)):
-    downscaling_factor = tuple(list(downscaling_factor) + [1])
+def compile_dataset(path, class_labels, resolution):
+    # downscaling_factor = tuple(list(downscaling_factor) + [1])
 
     photo_names = os.listdir(path)
     photo_names.sort()
@@ -105,18 +101,19 @@ def compile_dataset(path, class_labels,
     # main loop
     photos = []
     labels = []
+    coordinates = []
     photo_names_complete = []
     for n, name in enumerate(photo_names):
-        print("\rProcessing image %d of %d" % (n + 1, len(photo_names)),
-              end="")
+        print(f"\rProcessing image {n + 1} of {len(photo_names)}", end="")
         
         name_length = len(name)
 
         photo_path = os.path.join(os.path.join(path, name), name + ".jpg")
         if os.path.exists(photo_path):
-            photo = io.imread(photo_path) / 255
-            photo_down = skt.downscale_local_mean(
-                photo, downscaling_factor)
+            photo = io.imread(photo_path) #/ 255
+            # photo_down = skt.downscale_local_mean(
+            #     photo, downscaling_factor)
+            photo_down = cv2.resize(photo, resolution, interpolation=cv2.INTER_AREA)
             photos.append(photo_down)
 
             cube = np.zeros(
@@ -130,9 +127,14 @@ def compile_dataset(path, class_labels,
                     is_png = (".png" in filename) or (".PNG" in filename)
                     if (label in filename[name_length:]) and is_png:
                         label_path = os.path.join(path, name, filename)
-                        photo = io.imread(label_path) / 255
-                        photo_down = skt.downscale_local_mean(
-                            photo, downscaling_factor)[:, :, 3]
+
+                        # with warnings.catch_warnings():
+                        #     warnings.simplefilter("ignore")
+                        #     photo = cv2.imread(label_path, flags=cv2.IMREAD_UNCHANGED) #/ 255
+                        photo = io.imread(label_path)
+                        # photo_down = skt.downscale_local_mean(
+                        #     photo, downscaling_factor)[:, :, 3]
+                        photo_down = cv2.resize(photo, resolution, interpolation=cv2.INTER_AREA)[:, :, 3]
                         photo_down = np.where(photo_down > 0,
                                               np.ones_like(photo_down),
                                               np.zeros_like(photo_down))
@@ -144,8 +146,9 @@ def compile_dataset(path, class_labels,
                     if (label in filename) and is_jpg:
                         label_path = os.path.join(path, name, filename)
                         photo = io.imread(label_path)
-                        photo_down = skt.downscale_local_mean(
-                            photo, downscaling_factor)
+                        # photo_down = skt.downscale_local_mean(
+                        #     photo, downscaling_factor)
+                        photo_down = cv2.resize(photo, resolution, interpolation=cv2.INTER_AREA)
                         photo_down = np.mean(photo_down, axis=2)
                         photo_down = photo_down / (np.max(photo_down) + 1e-6)
                         cube[:, :, i] = photo_down
@@ -160,31 +163,112 @@ def compile_dataset(path, class_labels,
                 axis=2)
 
             labels.append(cube)
-            photo_names_complete.append(name)
+            photo_names_complete.append(photo_path)
+
+            # coordinates
+            coordinates.append(get_coordinates(photo_path))
 
     photos = np.stack(photos)
     labels = np.stack(labels)
+    coordinates = np.stack(coordinates)
 
-    return photos, labels
+    return photos, labels, coordinates, photo_names_complete
 
 
-def load_photos(path, downscaling_factor=(10, 10)):
-    downscaling_factor = tuple(list(downscaling_factor) + [1])
+def load_photos(path, resolution):
+    # downscaling_factor = tuple(list(downscaling_factor) + [1])
 
     photo_names = os.listdir(path)
     photo_names.sort()
 
     # main loop
     photos = []
+    coordinates = []
     for n, name in enumerate(photo_names):
         print("\rProcessing image %d of %d" % (n + 1, len(photo_names)),
               end="")
-        
-        photo = io.imread(os.path.join(path, name))
-        photo_down = skt.downscale_local_mean(
-            photo, downscaling_factor) / 255
+
+        photo_path = os.path.join(path, name)
+        photo = io.imread(photo_path)
+        # photo_down = skt.downscale_local_mean(
+        #     photo, downscaling_factor) / 255
+        photo_down = cv2.resize(photo, resolution, interpolation=cv2.INTER_AREA)
         photos.append(photo_down)
 
-    photos = np.stack(photos)
+        coordinates.append(get_coordinates(photo_path))
 
-    return photos
+    photos = np.stack(photos)
+    coordinates = np.stack(coordinates)
+
+    return photos, coordinates
+
+
+def get_coordinates(path):
+    with pyexiv2.Image(path) as image:
+        metadata = image.read_exif()
+
+    lat = metadata['Exif.GPSInfo.GPSLatitude'].split(' ')
+    lon = metadata['Exif.GPSInfo.GPSLongitude'].split(' ')
+    lat_sign = 1 if metadata['Exif.GPSInfo.GPSLatitudeRef'] == 'N' else -1
+    lon_sign = 1 if metadata['Exif.GPSInfo.GPSLongitudeRef'] == 'E' else -1
+    alt = metadata['Exif.GPSInfo.GPSAltitude']
+    alt_ref = metadata['Exif.GPSInfo.GPSAltitudeRef']
+
+    lat_num = lat_sign * (eval(lat[0]) + eval(lat[1]) / 60 + eval(lat[2]) / 3600)
+    lon_num = lon_sign * (eval(lon[0]) + eval(lon[1]) / 60 + eval(lon[2]) / 3600)
+    alt_num = eval(alt) - eval(alt_ref)
+
+    utm_crs_list = pyproj.database.query_utm_crs_info(
+        datum_name="WGS 84",
+        area_of_interest=pyproj.aoi.AreaOfInterest(
+            west_lon_degree=lon_num,
+            south_lat_degree=lat_num,
+            east_lon_degree=lon_num,
+            north_lat_degree=lat_num,
+        ),
+    )
+    utm_crs = pyproj.CRS.from_epsg(utm_crs_list[0].code)
+
+    transformer = pyproj.Transformer.from_crs(4326, utm_crs, always_xy=True)
+
+    utm_coords = transformer.transform(lon_num, lat_num)
+
+    xyz = np.array(list(utm_coords) + [alt_num])
+
+    return xyz
+
+
+def feature_matching(image_1, image_2):
+    sift = cv2.SIFT_create()
+    keypoints1, descriptors1 = sift.detectAndCompute(image_1, None)
+    keypoints2, descriptors2 = sift.detectAndCompute(image_2, None)
+
+    index_params = dict(algorithm=1, trees=10)
+    search_params = dict(checks=20)
+    flann = cv2.FlannBasedMatcher(index_params, search_params)
+    matches = flann.knnMatch(descriptors1, descriptors2, k=2)
+
+    good_matches = []
+    for match in matches:
+        if len(match) == 2:
+            m, n = match
+            if m.distance < 0.8 * n.distance:
+                good_matches.append(m)
+
+    if len(good_matches) > 4:
+        good_points_1 = np.float32([keypoints1[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+        good_points_2 = np.float32([keypoints2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+        _, inliers = cv2.findFundamentalMat(good_points_1, good_points_2, cv2.FM_RANSAC, ransacReprojThreshold=1)
+        good_matches = [good_matches[i] for i in range(len(inliers)) if inliers[i]]
+
+    table_1, table_2 = [], []
+    for match in good_matches:
+        point_1 = tuple(map(int, keypoints1[match.queryIdx].pt))
+        point_2 = tuple(map(int, keypoints2[match.trainIdx].pt))
+
+        table_1.append(np.array(point_1))
+        table_2.append(np.array(point_2))
+    table_1 = np.stack(table_1)
+    table_2 = np.stack(table_2)
+
+    return table_1.astype(int), table_2.astype(int)
