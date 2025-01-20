@@ -250,7 +250,9 @@ class SegmentationProject:
                 true_num[self.split == "test"].ravel(),
                 pred_num[self.split == "test"].ravel() ,
                 labels=np.arange(self.n_classes + 1),
-                target_names=list(self.labels) + ["Other"])
+                target_names=list(self.labels) + ["Other"],
+                zero_division=0.0
+            )
             print(self.report)
 
             # figures
@@ -295,7 +297,7 @@ class SegmentationProject:
             # photos, masks = pr.compile_dataset(images_path, self.labels, [self.downscaling_factor] * 2)
             # photos, masks = pr.resize(photos, masks, self.resolution)
 
-            photos, masks, _ = pr.compile_dataset(images_path, self.labels, self.resolution)
+            photos, masks, _, _ = pr.compile_dataset(images_path, self.labels, self.resolution)
 
             pred_y = self.u_net.predict(photos / 255, batch_size=5)
             entropy = - np.sum(pred_y * np.log(pred_y + 1e-6), axis=-1)
@@ -304,10 +306,12 @@ class SegmentationProject:
 
             # metrics
             report = classification_report(
-                true_num[self.split == "test"].ravel(),
-                pred_num[self.split == "test"].ravel() ,
+                true_num.ravel(),
+                pred_num.ravel() ,
                 labels=np.arange(self.n_classes + 1),
-                target_names=list(self.labels) + ["Other"])
+                target_names=list(self.labels) + ["Other"],
+                zero_division=0.0
+            )
             with open(os.path.join(prediction_path, "report.txt"), "w") as file:
                 file.write(report)
 
@@ -325,7 +329,7 @@ class SegmentationProject:
                 axes[0, 1].imshow(np.argmax(pred_y, axis=-1)[line, :, :],
                                   alpha=0.5, cmap=self.numeric_cmap,
                                   vmin=0, vmax=self.n_classes)
-                axes[0, 1].set_title("Predicted (" + self.split[line] + ")")
+                axes[0, 1].set_title("Predicted")
                 axes[0, 1].set_axis_off()
 
                 axes[1, 0].set_aspect("equal")
