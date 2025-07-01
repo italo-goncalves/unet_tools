@@ -17,6 +17,7 @@
 # import skimage.transform as skt
 import skimage.exposure as ske
 import skimage.io as io
+from skimage.util import view_as_windows
 import numpy as np
 import os
 import pyexiv2
@@ -166,7 +167,10 @@ def compile_dataset(path, class_labels, resolution):
             photo_names_complete.append(photo_path)
 
             # coordinates
-            coordinates.append(get_coordinates(photo_path))
+            try:
+                coordinates.append(get_coordinates(photo_path))
+            except Exception:
+                coordinates.append(None)
 
     photos = np.stack(photos)
     labels = np.stack(labels)
@@ -272,3 +276,108 @@ def feature_matching(image_1, image_2):
     table_2 = np.stack(table_2)
 
     return table_1.astype(int), table_2.astype(int)
+
+
+def slice_image(image, window_width, window_height, step_w, step_h):
+    if len(image.shape) == 3:
+        window_shape = (window_height, window_width, image.shape[-1])
+        step = (step_h, step_w, 1)
+        sliced = view_as_windows(image, window_shape, step)[:, :, 0, :, :, :]
+    else:
+        window_shape = (window_height, window_width)
+        step = (step_h, step_w)
+        sliced = view_as_windows(image, window_shape, step)
+
+    return sliced
+
+
+def flatten_sliced_images(images):
+    batch_size = np.prod(images.shape[:3]) # batch, grid_y, grid_x
+    new_shape = [batch_size] + list(images.shape[3:])  # height, width, channels
+    return np.reshape(images, new_shape)
+
+def compile_sliced_dataset(path, class_labels, resolution,
+                           window_width, window_height, step_w, step_h):
+    photo_names = os.listdir(path)
+    photo_names.sort()
+
+    # main loop
+    photos = []
+    labels = []
+    coordinates = []
+    photo_names_complete = []
+    for n, name in enumerate(photo_names):
+        print(f"\rProcessing image {n + 1} of {len(photo_names)}", end="")
+
+        name_length = len(name)
+
+        photo_path = os.path.join(os.path.join(path, name), name + ".jpg")
+        if os.path.exists(photo_path):
+            photo = io.imread(photo_path)
+            photo_sliced = slice_image(photo, window_width, window_height, step_w, step_h)
+            photo_down = np.stack([
+                np.stack([cv2.resize(im, resolution, interpolation=cv2.INTER_AREA) for im in row])
+                for row in photo_sliced]
+            )
+            photos.append(photo_down)
+
+            cube = np.zeros(list(photo_down.shape[:-1]) + [len(class_labels)])
+
+            label_files = os.listdir(os.path.join(path, name))
+            for i, label in enumerate(class_labels):
+                for filename in label_files:
+
+                    # for PNG files the mask is extracted from the alpha channel
+                    is_png = (".png" in filename) or (".PNG" in filename)
+                    if (label in filename[name_length:]) and is_png:
+                        label_path = os.path.join(path, name, filename)
+
+                        photo = io.imread(label_path)
+                        photo_sliced = slice_image(photo, window_width, window_height, step_w, step_h)
+                        photo_down = np.stack([
+                            np.stack([cv2.resize(im, resolution, interpolation=cv2.INTER_AREA)[:, :, 3] for im in row])
+                            for row in photo_sliced]
+                        )
+                        photo_down = np.where(photo_down > 0,
+                                              np.ones_like(photo_down),
+                                              np.zeros_like(photo_down))
+                        cube[:, :, :, :, i] = photo_down
+                        break
+
+                    # for JPG files the mask is extracted from the non-zero pixels
+                    is_jpg = (".jpg" in filename) or (".JPG" in filename)
+                    if (label in filename) and is_jpg:
+                        label_path = os.path.join(path, name, filename)
+                        photo = io.imread(label_path)
+                        photo_sliced = slice_image(photo, window_width, window_height, step_w, step_h)
+                        photo_down = np.stack([
+                            np.stack([cv2.resize(im, resolution, interpolation=cv2.INTER_AREA) for im in row])
+                            for row in photo_sliced]
+                        )
+                        photo_down = np.mean(photo_down, axis=-1)
+                        photo_down = photo_down / (np.max(photo_down) + 1e-6)
+                        cube[:, :, :, :, i] = photo_down
+                        break
+
+            # possibility of pixels with multiple labels
+            cube = cube / (np.sum(cube, axis=-1, keepdims=True) + 1e-6)
+
+            # 'other' class
+            cube = np.concatenate(
+                [cube, 1 - np.sum(cube, axis=-1, keepdims=True)],
+                axis=-1)
+
+            labels.append(cube)
+            photo_names_complete.append(photo_path)
+
+            # coordinates
+            try:
+                coordinates.append(get_coordinates(photo_path))
+            except Exception:
+                coordinates.append(None)
+
+    photos = np.stack(photos)
+    labels = np.stack(labels)
+    coordinates = np.stack(coordinates)
+
+    return photos, labels, coordinates, photo_names_complete

@@ -28,6 +28,7 @@ from sklearn.metrics import classification_report
 import skimage.transform as skt
 import skimage.io as io
 import warnings
+import PIL
 
 import unet_tools.preprocessing as pr
 import unet_tools.utils as ut
@@ -35,9 +36,10 @@ import unet_tools.keras as k
 
 from scipy.spatial.distance import cdist
 
+PIL.Image.MAX_IMAGE_PIXELS = None
 
 class SegmentationProject:
-    def __init__(self, image_width, image_height, labels, colors, seed=0):
+    def __init__(self, image_width, image_height, labels, colors, seed=0, misc_label='Other'):
         self.image_width = image_width
         self.image_height = image_height
         self.labels = tuple(labels)
@@ -46,9 +48,10 @@ class SegmentationProject:
         self.seed = seed
         # self.downscaling_factor = downscaling_factor
         self._resolution = None
+        self.misc_label = misc_label
 
         gcd = math.gcd(image_width, image_height)
-        self.aspect_ratio = (image_width / gcd, image_height / gcd)
+        self.aspect_ratio = (int(image_width / gcd), int(image_height / gcd))
 
         self.photos = None
         self.masks = None
@@ -72,7 +75,7 @@ class SegmentationProject:
 
         self.color_patches = [mpatches.Patch(color=c, label=l)
                               for c, l in zip(self.colors, self.labels)]
-        self.color_patches.append(mpatches.Patch(color='#888888', label='Other'))
+        self.color_patches.append(mpatches.Patch(color='#888888', label=self.misc_label))
         self.numeric_cmap = ListedColormap(list(self.colors) + ['#888888'])
         self.cmap_entropy = cm.lajolla
 
@@ -160,7 +163,7 @@ class SegmentationProject:
     #
     #     self.class_weights = pr.balance_weights(self.masks_resized)#.tolist()
 
-    def train_test_split(self, train_perc=0.5):
+    def train_test_split(self, train_perc=0.5, n_augments=5):
         self.split = ut.train_test_label(
             self.photos.shape[0], train_perc=train_perc, seed=self.seed)
 
@@ -169,12 +172,12 @@ class SegmentationProject:
 
         # data augmentation
         self.train_x, self.train_y = pr.augment_data(
-            self.train_x, self.train_y, n_rolls=5)
+            self.train_x, self.train_y, n_rolls=n_augments)
 
         self.train_x, self.train_y = pr.shuffle(self.train_x, self.train_y, seed=self.seed)
 
         self.train_x_full, self.train_y_full = pr.augment_data(
-            self.photos, self.masks, n_rolls=5)
+            self.photos, self.masks, n_rolls=n_augments)
 
         self.train_x_full, self.train_y_full = pr.shuffle(self.train_x_full, self.train_y_full, seed=self.seed)
 
@@ -250,7 +253,7 @@ class SegmentationProject:
                 true_num[self.split == "test"].ravel(),
                 pred_num[self.split == "test"].ravel() ,
                 labels=np.arange(self.n_classes + 1),
-                target_names=list(self.labels) + ["Other"],
+                target_names=list(self.labels) + [self.misc_label],
                 zero_division=0.0
             )
             print(self.report)
@@ -309,7 +312,7 @@ class SegmentationProject:
                 true_num.ravel(),
                 pred_num.ravel() ,
                 labels=np.arange(self.n_classes + 1),
-                target_names=list(self.labels) + ["Other"],
+                target_names=list(self.labels) + [self.misc_label],
                 zero_division=0.0
             )
             with open(os.path.join(prediction_path, "report.txt"), "w") as file:
@@ -430,3 +433,185 @@ class SegmentationProject:
             plt.close(fig)
 
         print('')
+
+
+class SlicedSegmentationProject(SegmentationProject):
+    def __init__(self, image_width, image_height, labels, colors,
+                 buffer_width=None, buffer_height=None,
+                 seed=0, misc_label='Other'):
+        super().__init__(image_width, image_height, labels, colors, seed=seed, misc_label=misc_label)
+
+        if buffer_width is None:
+            buffer_width = int(np.floor(image_width * 0.35))
+        if buffer_height is None:
+            buffer_height = int(np.floor(image_height * 0.35))
+
+        self.buffer_width = buffer_width
+        self.buffer_height = buffer_height
+
+        # window weights
+        weights_w = (np.arange(buffer_width) + 1) / (buffer_width + 1)
+        weights_w = np.tile(weights_w[None, :], [image_height, 1])
+
+        weights_h = (np.arange(buffer_height) + 1) / (buffer_height + 1)
+        weights_h = np.tile(weights_h[:, None], [1, image_width])
+
+        window_w = np.concatenate([
+            weights_w, np.ones([image_height, image_width - 2*buffer_width], dtype=float), weights_w[:, ::-1]
+        ], axis=1)
+        window_h = np.concatenate([
+            weights_h, np.ones([image_height - 2 * buffer_height, image_width], dtype=float), weights_h[::-1, :]
+        ], axis=0)
+        self.weight_mask = (window_h + window_w) / 2
+
+    def compile_dataset(self, path):
+        photos, masks, coordinates, photo_paths = pr.compile_sliced_dataset(
+            path, self.labels, resolution=self.resolution,
+            window_width=self.image_width, window_height=self.image_height,
+            step_w=self.image_width - self.buffer_width,
+            step_h=self.image_height - self.buffer_height
+        )
+        self.photos = photos
+        self.masks = masks
+        self.coordinates = coordinates
+        self.photo_paths = photo_paths
+
+    def transfer_labels(self, path, distance_buffer=10.0):
+        raise NotImplementedError
+
+    def train_test_split(self, train_perc=0.5, n_augments=5):
+        self.split = ut.train_test_label(
+            self.photos.shape[0], train_perc=train_perc, seed=self.seed)
+
+        # reshaping
+        train_x = self.photos[self.split == "train", :, :, :, :, :]
+        train_y = self.masks[self.split == "train", :, :, :, :, :]
+
+        train_x = pr.flatten_sliced_images(train_x)
+        train_y = pr.flatten_sliced_images(train_y)
+
+        train_x_full = pr.flatten_sliced_images(self.photos)
+        train_y_full = pr.flatten_sliced_images(self.masks)
+
+        # data augmentation
+        self.train_x, self.train_y = pr.augment_data(train_x, train_y, n_rolls=n_augments)
+        self.train_x, self.train_y = pr.shuffle(self.train_x, self.train_y, seed=self.seed)
+
+        self.train_x_full, self.train_y_full = pr.augment_data(train_x_full, train_y_full, n_rolls=n_augments)
+        self.train_x_full, self.train_y_full = pr.shuffle(self.train_x_full, self.train_y_full, seed=self.seed)
+
+    def predict_single_image(self, image):
+        im_shape = image.shape
+        n = [int(np.ceil((im_shape[0] - self.buffer_height) / (self.image_height - self.buffer_height))),
+             int(np.ceil((im_shape[1] - self.buffer_width) / (self.image_width - self.buffer_width)))]
+        padded_size = [n[0] * (self.image_height - self.buffer_height) + self.buffer_height,
+                       n[1] * (self.image_width - self.buffer_width) + self.buffer_width]
+        pad_width = [[0, padded_size[0] - im_shape[0]], [0, padded_size[1] - im_shape[1]], [0, 0]]
+        padded_image = np.pad(image, pad_width)
+
+        sliced = pr.slice_image(padded_image,
+                                window_width=self.image_width,
+                                window_height=self.image_height,
+                                step_w=self.image_width - self.buffer_width,
+                                step_h=self.image_height - self.buffer_height
+                                )
+        # print(sliced.shape)
+        flattened = np.reshape(sliced, [np.prod(n), self.image_height, self.image_width, 3])
+        resized = np.stack([cv2.resize(im, self.resolution, interpolation=cv2.INTER_AREA) for im in flattened])
+
+        masks_raw = self.u_net.predict(resized / 255, batch_size=10, verbose=0)
+        masks_resized = np.stack([cv2.resize(im, (self.image_width, self.image_height),
+                                             interpolation=cv2.INTER_AREA)
+                                  for im in masks_raw])
+        masks_gridded = np.reshape(masks_resized, [n[0], n[1], self.image_height, self.image_width, -1])
+
+        pred_shape = [
+            n[0] * self.image_height + self.buffer_height,
+            n[1] * self.image_width + self.buffer_width,
+            self.n_classes + 1
+        ]
+        full_mask = np.zeros(pred_shape, dtype=float)
+        total_weight = np.zeros(pred_shape[:-1], dtype=float)
+        pos_i = 0
+        step_i, step_j = self.image_height - self.buffer_height, self.image_width - self.buffer_width
+        for i in range(n[0]):
+            pos_j = 0
+            for j in range(n[1]):
+                full_mask[pos_i:(pos_i + self.image_height), pos_j:(pos_j + self.image_width), :] \
+                    += masks_gridded[i, j, :, :, :] * self.weight_mask[:, :, None]
+                total_weight[pos_i:(pos_i + self.image_height), pos_j:(pos_j + self.image_width)] \
+                    += self.weight_mask
+                pos_j += step_j
+            pos_i += step_i
+        full_mask = full_mask / (total_weight[:, :, None] + 1e-6)
+        full_mask = full_mask[:im_shape[0], :im_shape[1], :]
+
+        entropy = - np.sum(full_mask * np.log(full_mask + 1e-6), axis=-1)
+
+        return full_mask, entropy
+
+    def validate(self, path, dpi=150):
+        raise NotImplementedError
+
+    def predict_masks(self, images_path, prediction_path, dpi=150):
+        for label in (self.labels + ('Predictions',)):
+            try:
+                os.mkdir(os.path.join(prediction_path, label))
+            except FileExistsError:
+                continue
+
+        photo_names = os.listdir(images_path)
+
+        for f, file in enumerate(photo_names):
+            print(f'\rSaving predictions for image {f + 1} of '
+                  f'{len(photo_names)}: {file}          ',
+                  end='')
+
+            photo = io.imread(os.path.join(images_path, file))
+            mask_big, entropy = self.predict_single_image(photo)
+            mask_cat = np.argmax(mask_big, axis=-1)
+
+            name, ext = file.split('.')
+
+            for i, label in enumerate(self.labels):
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    io.imsave(os.path.join(prediction_path, label, f'{name}_mask.{ext}'),
+                              (mask_cat == i).astype(np.uint8) * 255)
+
+            # visualization of predictions
+            fig, axes = plt.subplots(2, 2, sharex=True, sharey=True,
+                                     figsize=[12, 12])
+            axes[0, 0].imshow(photo)
+            axes[0, 0].set_title("Image")
+            axes[0, 0].set_axis_off()
+
+            axes[0, 1].imshow(photo)
+            axes[0, 1].imshow(mask_cat,
+                              alpha=0.5, cmap=self.numeric_cmap,
+                              vmin=0, vmax=self.n_classes)
+            axes[0, 1].set_title("Predicted")
+            axes[0, 1].set_axis_off()
+
+            axes[1, 0].set_aspect("equal")
+            axes[1, 0].set_axis_off()
+            axes[1, 0].legend(handles=self.color_patches, mode="expand",
+                              loc="upper left", frameon=False, fontsize=14)
+            axes[1, 0].set_axis_off()
+
+            axes[1, 1].imshow(photo)
+            axes[1, 1].imshow(entropy,
+                              alpha=0.25, cmap=self.cmap_entropy,
+                              vmin=0, vmax=np.log(self.n_classes))
+            axes[1, 1].set_title("Entropy")
+            axes[1, 1].set_axis_off()
+
+            plt.savefig(os.path.join(prediction_path, 'Predictions', name + '_prediction.' + ext),
+                        bbox_inches='tight', dpi=dpi)
+
+            plt.close(fig)
+
+        print('')
+
+    def test(self, images_path, prediction_path, dpi=150):
+        raise NotImplementedError
