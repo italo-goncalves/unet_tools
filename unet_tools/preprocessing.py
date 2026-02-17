@@ -144,7 +144,7 @@ def compile_dataset(path, class_labels, resolution):
 
                     # for JPG files the mask is extracted from the non-zero pixels
                     is_jpg = (".jpg" in filename) or (".JPG" in filename)
-                    if (label in filename) and is_jpg:
+                    if (label in filename[name_length:]) and is_jpg:
                         label_path = os.path.join(path, name, filename)
                         photo = io.imread(label_path)
                         # photo_down = skt.downscale_local_mean(
@@ -346,7 +346,7 @@ def compile_sliced_dataset(path, class_labels, resolution,
 
                     # for JPG files the mask is extracted from the non-zero pixels
                     is_jpg = (".jpg" in filename) or (".JPG" in filename)
-                    if (label in filename) and is_jpg:
+                    if (label in filename[name_length:]) and is_jpg:
                         label_path = os.path.join(path, name, filename)
                         photo = io.imread(label_path)
                         photo_sliced = slice_image(photo, window_width, window_height, step_w, step_h)

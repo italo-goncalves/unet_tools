@@ -232,66 +232,66 @@ class SegmentationProject:
 
     def plot_history(self):
         if self.u_net is None:
-            return Exception('U-net not trained')
-        else:
-            fig = plt.figure()
-            plt.plot(self.train_history)
-            plt.plot(self.validation_history)
-            return fig
+            raise Exception('U-net not trained')
+
+        fig = plt.figure()
+        plt.plot(self.train_history)
+        plt.plot(self.validation_history)
+        return fig
 
     def validate(self, path, dpi=150):
         if self.u_net is None:
-            return Exception('U-net not trained')
-        else:
-            pred_y = self.u_net.predict(self.photos / 255, batch_size=5)
-            entropy = - np.sum(pred_y * np.log(pred_y + 1e-6), axis=-1)
-            true_num = np.argmax(self.masks, axis=-1)
-            pred_num = np.argmax(pred_y, axis=-1)
+            raise Exception('U-net not trained')
 
-            # metrics
-            self.report = classification_report(
-                true_num[self.split == "test"].ravel(),
-                pred_num[self.split == "test"].ravel() ,
-                labels=np.arange(self.n_classes + 1),
-                target_names=list(self.labels) + [self.misc_label],
-                zero_division=0.0
-            )
-            print(self.report)
+        pred_y = self.u_net.predict(self.photos / 255, batch_size=5)
+        entropy = - np.sum(pred_y * np.log(pred_y + 1e-6), axis=-1)
+        true_num = np.argmax(self.masks, axis=-1)
+        pred_num = np.argmax(pred_y, axis=-1)
 
-            # figures
-            for line in range(self.masks.shape[0]):
-                fig, axes = plt.subplots(2, 2, sharex=True, sharey=True, figsize=[12, 12])
-                axes[0, 0].imshow(self.photos[line, :, :, :])
-                axes[0, 0].imshow(np.argmax(self.masks, axis=-1)[line, :, :],
-                                  alpha=0.5, cmap=self.numeric_cmap,
-                                  vmin=0, vmax=self.n_classes)
-                axes[0, 0].set_title("True")
-                axes[0, 0].set_axis_off()
+        # metrics
+        self.report = classification_report(
+            true_num[self.split == "test"].ravel(),
+            pred_num[self.split == "test"].ravel() ,
+            labels=np.arange(self.n_classes + 1),
+            target_names=list(self.labels) + [self.misc_label],
+            zero_division=0.0
+        )
+        print(self.report)
 
-                axes[0, 1].imshow(self.photos[line, :, :, :])
-                axes[0, 1].imshow(np.argmax(pred_y, axis=-1)[line, :, :],
-                                  alpha=0.5, cmap=self.numeric_cmap,
-                                  vmin=0, vmax=self.n_classes)
-                axes[0, 1].set_title("Predicted (" + self.split[line] + ")")
-                axes[0, 1].set_axis_off()
+        # figures
+        for line in range(self.masks.shape[0]):
+            fig, axes = plt.subplots(2, 2, sharex=True, sharey=True, figsize=[12, 12])
+            axes[0, 0].imshow(self.photos[line, :, :, :])
+            axes[0, 0].imshow(np.argmax(self.masks, axis=-1)[line, :, :],
+                              alpha=0.5, cmap=self.numeric_cmap,
+                              vmin=0, vmax=self.n_classes)
+            axes[0, 0].set_title("True")
+            axes[0, 0].set_axis_off()
 
-                axes[1, 0].set_aspect("equal")
-                axes[1, 0].set_axis_off()
-                axes[1, 0].legend(handles=self.color_patches, mode="expand",
-                                  loc="upper left", frameon=False, fontsize=14)
-                axes[1, 0].set_axis_off()
+            axes[0, 1].imshow(self.photos[line, :, :, :])
+            axes[0, 1].imshow(np.argmax(pred_y, axis=-1)[line, :, :],
+                              alpha=0.5, cmap=self.numeric_cmap,
+                              vmin=0, vmax=self.n_classes)
+            axes[0, 1].set_title("Predicted (" + self.split[line] + ")")
+            axes[0, 1].set_axis_off()
 
-                axes[1, 1].imshow(self.photos[line, :, :, :])
-                axes[1, 1].imshow(entropy[line, :, :],
-                                  alpha=0.25, cmap=self.cmap_entropy,
-                                  vmin=0, vmax=np.log(self.n_classes))
-                axes[1, 1].set_title("Entropy")
-                axes[1, 1].set_axis_off()
+            axes[1, 0].set_aspect("equal")
+            axes[1, 0].set_axis_off()
+            axes[1, 0].legend(handles=self.color_patches, mode="expand",
+                              loc="upper left", frameon=False, fontsize=14)
+            axes[1, 0].set_axis_off()
 
-                plt.savefig(os.path.join(path, f'Prediction_{line}.jpg'),
-                            bbox_inches='tight', dpi=dpi)
+            axes[1, 1].imshow(self.photos[line, :, :, :])
+            axes[1, 1].imshow(entropy[line, :, :],
+                              alpha=0.25, cmap=self.cmap_entropy,
+                              vmin=0, vmax=np.log(self.n_classes))
+            axes[1, 1].set_title("Entropy")
+            axes[1, 1].set_axis_off()
 
-                plt.close(fig)
+            plt.savefig(os.path.join(path, f'Prediction_{line}.jpg'),
+                        bbox_inches='tight', dpi=dpi)
+
+            plt.close(fig)
 
     def test(self, images_path, prediction_path, dpi=150):
         if self.u_net is None:
@@ -551,7 +551,62 @@ class SlicedSegmentationProject(SegmentationProject):
         return full_mask, entropy
 
     def validate(self, path, dpi=150):
-        raise NotImplementedError
+        if self.u_net is None:
+            raise Exception('U-net not trained')
+
+        photos_fl = pr.flatten_sliced_images(self.photos)
+        masks_fl = pr.flatten_sliced_images(self.masks)
+        split = np.repeat(self.split, photos_fl.shape[0] / self.photos.shape[0])
+
+        pred_y = self.u_net.predict(photos_fl / 255, batch_size=5)
+        entropy = - np.sum(pred_y * np.log(pred_y + 1e-6), axis=-1)
+        true_num = np.argmax(masks_fl, axis=-1)
+        pred_num = np.argmax(pred_y, axis=-1)
+
+        # metrics
+        self.report = classification_report(
+            true_num[split == "test"].ravel(),
+            pred_num[split == "test"].ravel(),
+            labels=np.arange(self.n_classes + 1),
+            target_names=list(self.labels) + [self.misc_label],
+            zero_division=0.0
+        )
+        print(self.report)
+
+        # figures
+        for line in range(masks_fl.shape[0]):
+            fig, axes = plt.subplots(2, 2, sharex=True, sharey=True, figsize=[12, 12])
+            axes[0, 0].imshow(photos_fl[line, :, :, :])
+            axes[0, 0].imshow(np.argmax(masks_fl, axis=-1)[line, :, :],
+                              alpha=0.5, cmap=self.numeric_cmap,
+                              vmin=0, vmax=self.n_classes)
+            axes[0, 0].set_title("True")
+            axes[0, 0].set_axis_off()
+
+            axes[0, 1].imshow(photos_fl[line, :, :, :])
+            axes[0, 1].imshow(np.argmax(pred_y, axis=-1)[line, :, :],
+                              alpha=0.5, cmap=self.numeric_cmap,
+                              vmin=0, vmax=self.n_classes)
+            axes[0, 1].set_title("Predicted (" + split[line] + ")")
+            axes[0, 1].set_axis_off()
+
+            axes[1, 0].set_aspect("equal")
+            axes[1, 0].set_axis_off()
+            axes[1, 0].legend(handles=self.color_patches, mode="expand",
+                              loc="upper left", frameon=False, fontsize=14)
+            axes[1, 0].set_axis_off()
+
+            axes[1, 1].imshow(photos_fl[line, :, :, :])
+            axes[1, 1].imshow(entropy[line, :, :],
+                              alpha=0.25, cmap=self.cmap_entropy,
+                              vmin=0, vmax=np.log(self.n_classes))
+            axes[1, 1].set_title("Entropy")
+            axes[1, 1].set_axis_off()
+
+            plt.savefig(os.path.join(path, f'Prediction_{line}.jpg'),
+                        bbox_inches='tight', dpi=dpi)
+
+            plt.close(fig)
 
     def predict_masks(self, images_path, prediction_path, dpi=150):
         for label in (self.labels + ('Predictions',)):
